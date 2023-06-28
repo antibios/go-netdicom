@@ -3,12 +3,12 @@ package netdicom
 import (
 	"fmt"
 
-	"github.com/grailbio/go-dicom"
-	"github.com/grailbio/go-dicom/dicomio"
-	"github.com/grailbio/go-dicom/dicomlog"
-	"github.com/grailbio/go-dicom/dicomtag"
-	"github.com/grailbio/go-dicom/dicomuid"
-	"github.com/grailbio/go-netdicom/dimse"
+	"github.com/antibios/go-dicom"
+	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/go-dicom/dicomlog"
+	"github.com/antibios/go-dicom/dicomtag"
+	"github.com/antibios/go-dicom/dicomuid"
+	"github.com/antibios/go-netdicom/dimse"
 )
 
 // Helper function used by C-{STORE,GET,MOVE} to send a dataset using C-STORE
@@ -47,6 +47,7 @@ func runCStoreOnAssociation(upcallCh chan upcallEvent, downcallCh chan stateEven
 		dicomuid.UIDString(context.transferSyntaxUID),
 		dicomuid.UIDString(sopClassUID),
 		sopInstanceUID)
+	// MK Write our own data to the DICOM file.
 	bodyEncoder := dicomio.NewBytesEncoderWithTransferSyntax(context.transferSyntaxUID)
 	for _, elem := range ds.Elements {
 		if elem.Tag.Group == dicomtag.MetadataGroup {

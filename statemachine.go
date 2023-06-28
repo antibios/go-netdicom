@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grailbio/go-dicom/dicomio"
-	"github.com/grailbio/go-dicom/dicomlog"
-	"github.com/grailbio/go-dicom/dicomuid"
-	"github.com/grailbio/go-netdicom/dimse"
-	"github.com/grailbio/go-netdicom/pdu"
+	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/go-dicom/dicomlog"
+	"github.com/antibios/go-dicom/dicomuid"
+	"github.com/antibios/go-netdicom/dimse"
+	"github.com/antibios/go-netdicom/pdu"
 )
 
 type stateType int

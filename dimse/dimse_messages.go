@@ -5,9 +5,9 @@ package dimse
 import (
 	"fmt"
 
-	"github.com/grailbio/go-dicom"
-	"github.com/grailbio/go-dicom/dicomio"
-	"github.com/grailbio/go-dicom/dicomtag"
+	"github.com/antibios/go-dicom"
+	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/go-dicom/dicomtag"
 )
 
 type CStoreRq struct {
@@ -16,6 +16,7 @@ type CStoreRq struct {
 	Priority                             uint16
 	CommandDataSetType                   uint16
 	AffectedSOPInstanceUID               string
+	CalledApplicationEntityTitle	     string
 	MoveOriginatorApplicationEntityTitle string
 	MoveOriginatorMessageID              MessageID
 	Extra                                []*dicom.Element // Unparsed elements

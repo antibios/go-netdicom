@@ -201,9 +201,9 @@ package dimse
 import (
 	"fmt"
 
-	"github.com/grailbio/go-dicom"
-	"github.com/grailbio/go-dicom/dicomio"
-	"github.com/grailbio/go-dicom/dicomtag"
+	"github.com/antibios/go-dicom"
+	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/go-dicom/dicomtag"
 )
 
         """, file=out)

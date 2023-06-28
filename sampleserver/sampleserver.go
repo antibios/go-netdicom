@@ -20,12 +20,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/grailbio/go-dicom"
-	"github.com/grailbio/go-dicom/dicomio"
-	"github.com/grailbio/go-dicom/dicomtag"
-	"github.com/grailbio/go-dicom/dicomuid"
-	"github.com/grailbio/go-netdicom"
-	"github.com/grailbio/go-netdicom/dimse"
+	"github.com/antibios/go-dicom"
+	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/go-dicom/dicomtag"
+	"github.com/antibios/go-dicom/dicomuid"
+	"github.com/antibios/go-netdicom"
+	"github.com/antibios/go-netdicom/dimse"
 )
 
 var (
@@ -62,7 +62,10 @@ func (ss *server) onCStore(
 	transferSyntaxUID string,
 	sopClassUID string,
 	sopInstanceUID string,
+	callingAETitle string,
+	calledAETitle string,
 	data []byte) dimse.Status {
+	fmt.Printf("Called %s\t Calling %s\n", calledAETitle, callingAETitle)
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.pathSeq++
@@ -357,8 +360,10 @@ func main() {
 		CStore: func(connState netdicom.ConnectionState, transferSyntaxUID string,
 			sopClassUID string,
 			sopInstanceUID string,
+			calledAETitle string,
+			callingAETitle string,
 			data []byte) dimse.Status {
-			return ss.onCStore(transferSyntaxUID, sopClassUID, sopInstanceUID, data)
+			return ss.onCStore(transferSyntaxUID, sopClassUID, sopInstanceUID, calledAETitle, callingAETitle, data)
 		},
 		TLSConfig: tlsConfig,
 	}

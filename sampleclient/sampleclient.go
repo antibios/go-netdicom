@@ -5,11 +5,11 @@ import (
 	"flag"
 	"log"
 
-	"github.com/grailbio/go-dicom"
-	"github.com/grailbio/go-dicom/dicomtag"
-	"github.com/grailbio/go-netdicom"
-	"github.com/grailbio/go-netdicom/dimse"
-	"github.com/grailbio/go-netdicom/sopclass"
+	"github.com/antibios/go-dicom"
+	"github.com/antibios/go-dicom/dicomtag"
+	"github.com/antibios/go-netdicom"
+	"github.com/antibios/go-netdicom/dimse"
+	"github.com/antibios/go-netdicom/sopclass"
 )
 
 var (
