@@ -1,16 +1,5 @@
--------
-
-**This project is no longer maintained.**
-
 
 Please see [suyashkumar/dicom](https://github.com/suyashkumar/dicom/) for an
-alternative implementation of DICOM in Go, and see [this
-issue](https://github.com/suyashkumar/dicom/issues/41) for any progress on a
-compatible DICOM network protocol implementation.
-
--------
-
-[![GoDoc](https://godoc.org/github.com/antibios/go-netdicom?status.svg)](https://godoc.org/github.com/antibios/go-netdicom) [![Build Status](https://travis-ci.org/grailbio/go-netdicom.svg?branch=master)](https://travis-ci.org/grailbio/go-netdicom.svg?branch=master)
 
 # Golang implementation of DICOM network protocol.
 
@@ -18,6 +7,10 @@ See doc.go for (incomplete) documentation.  See storeclient and storeserver for
 examples.
 
 Inspired by https://github.com/pydicom/pynetdicom3.
+
+Status as of 2024-04-28:
+- Update to support suyashkumar dicom implementation.  Basic client and server working, but additional testing required.
+
 
 Status as of 2017-10-02:
 
