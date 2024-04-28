@@ -5,7 +5,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/antibios/go-dicom"
+	"github.com/antibios/dicom"
 	"github.com/antibios/go-netdicom"
 	"github.com/antibios/go-netdicom/dimse"
 	"github.com/antibios/go-netdicom/sopclass"
@@ -46,9 +46,10 @@ func startServer(faults netdicom.FaultInjector) net.Listener {
 }
 
 func runClient(serverAddr string, faults netdicom.FaultInjector) {
-	dataset, err := dicom.ReadDataSetFromFile(
-		"../testdata/reportsi.dcm",
-		dicom.ReadOptions{})
+	/* 	dataset, err := dicom.ReadDataSetFromFile(
+	"../testdata/reportsi.dcm",
+	dicom.ReadOptions{}) */
+	dataset, err := dicom.ParseFile("../testdata/reportsi.dcm", nil, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func runClient(serverAddr string, faults netdicom.FaultInjector) {
 		log.Fatal(err)
 	}
 	su.Connect(serverAddr)
-	err = su.CStore(dataset)
+	err = su.CStore(&dataset)
 	log.Printf("Store done with status: %v", err)
 	su.Release()
 }

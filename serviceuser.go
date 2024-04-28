@@ -5,15 +5,16 @@ package netdicom
 //go:generate stringer -type QRLevel
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/dicom"
+	dicomtag "github.com/antibios/dicom/pkg/tag"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
 	"github.com/antibios/go-dicom/dicomlog"
-	"github.com/antibios/go-dicom/dicomtag"
-	"github.com/antibios/go-dicom/dicomuid"
 	"github.com/antibios/go-netdicom/dimse"
 )
 
@@ -27,14 +28,14 @@ const (
 
 // ServiceUser encapsulates implements the client side of DICOM network protocol.
 //
-//  user, err := netdicom.NewServiceUser(netdicom.ServiceUserParams{SOPClasses: sopclass.QRFindClasses})
-//  // Connect to server 1.2.3.4, port 8888
-//  user.Connect("1.2.3.4:8888")
-//  // Send test.dcm to the server
-//  ds, err := dicom.ReadDataSetFromFile("test.dcm", dicom.ReadOptions{})
-//  err := user.CStore(ds)
-//  // Disconnect
-//  user.Release()
+//	user, err := netdicom.NewServiceUser(netdicom.ServiceUserParams{SOPClasses: sopclass.QRFindClasses})
+//	// Connect to server 1.2.3.4, port 8888
+//	user.Connect("1.2.3.4:8888")
+//	// Send test.dcm to the server
+//	ds, err := dicom.ReadDataSetFromFile("test.dcm", dicom.ReadOptions{})
+//	err := user.CStore(ds)
+//	// Disconnect
+//	user.Release()
 //
 // The ServiceUser class is thread compatible. That is, you cannot call C*
 // methods - say CStore and CFind requests - concurrently from two goroutines.
@@ -87,10 +88,10 @@ func validateServiceUserParams(params *ServiceUserParams) error {
 		return fmt.Errorf("Empty ServiceUserParams.SOPClasses")
 	}
 	if len(params.TransferSyntaxes) == 0 {
-		params.TransferSyntaxes = dicomio.StandardTransferSyntaxes
+		params.TransferSyntaxes = StandardTransferSyntaxes
 	} else {
 		for i, uid := range params.TransferSyntaxes {
-			canonicalUID, err := dicomio.CanonicalTransferSyntaxUID(uid)
+			canonicalUID, err := CanonicalTransferSyntaxUID(uid)
 			if err != nil {
 				return err
 			}
@@ -216,7 +217,7 @@ func (su *ServiceUser) CEcho() error {
 // until the operation finishes.
 //
 // REQUIRES: Connect() or SetConn has been called.
-func (su *ServiceUser) CStore(ds *dicom.DataSet) error {
+func (su *ServiceUser) CStore(ds *dicom.Dataset) error {
 	err := su.waitUntilReady()
 	if err != nil {
 		return err
@@ -226,8 +227,8 @@ func (su *ServiceUser) CStore(ds *dicom.DataSet) error {
 	var sopClassUID string
 	if sopClassUIDElem, err := ds.FindElementByTag(dicomtag.MediaStorageSOPClassUID); err != nil {
 		return err
-	} else if sopClassUID, err = sopClassUIDElem.GetString(); err != nil {
-		return err
+	} else {
+		sopClassUID = sopClassUIDElem.Value.GetValue().([]string)[0]
 	}
 	context, err := su.cm.lookupByAbstractSyntaxUID(sopClassUID)
 	if err != nil {
@@ -315,24 +316,27 @@ func encodeQRPayload(opType qrOpType, qrLevel QRLevel, filter []*dicom.Element, 
 	}
 
 	// Encode the data payload containing the filtering conditions.
-	dataEncoder := dicomio.NewBytesEncoderWithTransferSyntax(context.transferSyntaxUID)
+	//dataEncoder := dicomio.NewBytesEncoderWithTransferSyntax(context.transferSyntaxUID)
+	b := bytes.Buffer{}
+	dataEncoder := dicom.NewWriter(&b, dicom.SkipVRVerification())
+	dataEncoder.SetTransferSyntax(binary.LittleEndian, true)
 	foundQRLevel := false
 	for _, elem := range filter {
 		if elem.Tag == dicomtag.QueryRetrieveLevel {
 			foundQRLevel = true
 		}
-		dicom.WriteElement(dataEncoder, elem)
+		dataEncoder.WriteElement(elem)
 		dicomlog.Vprintf(2, "dicom.serviceUser: Add QR payload: %v", elem)
 	}
 	if !foundQRLevel {
 		elem := dicom.MustNewElement(dicomtag.QueryRetrieveLevel, qrLevelString)
 		dicomlog.Vprintf(2, "dicom.serviceUser: Add QR payload: %v", elem)
-		dicom.WriteElement(dataEncoder, elem)
+		dataEncoder.WriteElement(elem)
 	}
-	if err := dataEncoder.Error(); err != nil {
+	/* 	if err := dataEncoder.Error(); err != nil {
 		return context, nil, err
-	}
-	return context, dataEncoder.Bytes(), err
+	} */
+	return context, b.Bytes(), err
 }
 
 // CFind issues a C-FIND request. Returns a channel that streams sequence of

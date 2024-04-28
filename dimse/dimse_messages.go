@@ -4,17 +4,17 @@ package dimse
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
-	"github.com/antibios/go-dicom/dicomtag"
+	"github.com/antibios/dicom"
+	dicomtag "github.com/antibios/dicom/pkg/tag"
 )
 
 type CStoreRq struct {
 	AffectedSOPClassUID                  string
 	MessageID                            MessageID
-	Priority                             uint16
-	CommandDataSetType                   uint16
+	Priority                             int
+	CommandDataSetType                   int
 	AffectedSOPInstanceUID               string
 	CalledApplicationEntityTitle	     string
 	MoveOriginatorApplicationEntityTitle string
@@ -22,14 +22,15 @@ type CStoreRq struct {
 	Extra                                []*dicom.Element // Unparsed elements
 }
 
-func (v *CStoreRq) Encode(e *dicomio.Encoder) {
+func (v *CStoreRq) Encode(e *dicom.Writer) {
+	
 	elems := []*dicom.Element{}
-	elems = append(elems, newElement(dicomtag.CommandField, uint16(1)))
-	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
-	elems = append(elems, newElement(dicomtag.MessageID, v.MessageID))
-	elems = append(elems, newElement(dicomtag.Priority, v.Priority))
-	elems = append(elems, newElement(dicomtag.CommandDataSetType, v.CommandDataSetType))
-	elems = append(elems, newElement(dicomtag.AffectedSOPInstanceUID, v.AffectedSOPInstanceUID))
+	elems = append(elems, newElement(dicomtag.CommandField, []int{1}))
+	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, []string{v.AffectedSOPClassUID}))
+	elems = append(elems, newElement(dicomtag.MessageID, []int{int(v.MessageID)}))
+	elems = append(elems, newElement(dicomtag.Priority, []int{v.Priority}))
+	elems = append(elems, newElement(dicomtag.CommandDataSetType, []int{v.CommandDataSetType}))
+	elems = append(elems, newElement(dicomtag.AffectedSOPInstanceUID, []string{v.AffectedSOPInstanceUID}))
 	if v.MoveOriginatorApplicationEntityTitle != "" {
 		elems = append(elems, newElement(dicomtag.MoveOriginatorApplicationEntityTitle, v.MoveOriginatorApplicationEntityTitle))
 	}
@@ -41,7 +42,7 @@ func (v *CStoreRq) Encode(e *dicomio.Encoder) {
 }
 
 func (v *CStoreRq) HasData() bool {
-	return v.CommandDataSetType != CommandDataSetTypeNull
+	return v.CommandDataSetType != int(CommandDataSetTypeNull)
 }
 
 func (v *CStoreRq) CommandField() int {
@@ -57,15 +58,15 @@ func (v *CStoreRq) GetStatus() *Status {
 }
 
 func (v *CStoreRq) String() string {
-	return fmt.Sprintf("CStoreRq{AffectedSOPClassUID:%v MessageID:%v Priority:%v CommandDataSetType:%v AffectedSOPInstanceUID:%v MoveOriginatorApplicationEntityTitle:%v MoveOriginatorMessageID:%v}}", v.AffectedSOPClassUID, v.MessageID, v.Priority, v.CommandDataSetType, v.AffectedSOPInstanceUID, v.MoveOriginatorApplicationEntityTitle, v.MoveOriginatorMessageID)
+	return fmt.Sprintf("CStoreRq{AffectedSOPClassUID:%v MessageID:%v Priority:%v CommandDataSetType:%v AffectedSOPInstanceUID:%v MoveOriginatorApplicationEntityTitle:%v MoveOriginatorMessageID:%v}}", v.AffectedSOPClassUID, v.MessageID, v.Priority, v.CommandDataSetType, v.AffectedSOPInstanceUID, strings.TrimSpace(v.MoveOriginatorApplicationEntityTitle), v.MoveOriginatorMessageID)
 }
 
 func decodeCStoreRq(d *messageDecoder) *CStoreRq {
 	v := &CStoreRq{}
 	v.AffectedSOPClassUID = d.getString(dicomtag.AffectedSOPClassUID, requiredElement)
 	v.MessageID = d.getUInt16(dicomtag.MessageID, requiredElement)
-	v.Priority = d.getUInt16(dicomtag.Priority, requiredElement)
-	v.CommandDataSetType = d.getUInt16(dicomtag.CommandDataSetType, requiredElement)
+	v.Priority = int(d.getUInt16(dicomtag.Priority, requiredElement))
+	v.CommandDataSetType = int(d.getUInt16(dicomtag.CommandDataSetType, requiredElement))
 	v.AffectedSOPInstanceUID = d.getString(dicomtag.AffectedSOPInstanceUID, requiredElement)
 	v.MoveOriginatorApplicationEntityTitle = d.getString(dicomtag.MoveOriginatorApplicationEntityTitle, optionalElement)
 	v.MoveOriginatorMessageID = d.getUInt16(dicomtag.MoveOriginatorMessageID, optionalElement)
@@ -82,9 +83,11 @@ type CStoreRsp struct {
 	Extra                     []*dicom.Element // Unparsed elements
 }
 
-func (v *CStoreRsp) Encode(e *dicomio.Encoder) {
+func (v *CStoreRsp) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
-	elems = append(elems, newElement(dicomtag.CommandField, uint16(32769)))
+	//Why does it have to be uint16
+	//elems = append(elems, newElement(dicomtag.CommandField, uint16(32769)))
+	elems = append(elems, newElement(dicomtag.CommandField, 32769))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
 	elems = append(elems, newElement(dicomtag.MessageIDBeingRespondedTo, v.MessageIDBeingRespondedTo))
 	elems = append(elems, newElement(dicomtag.CommandDataSetType, v.CommandDataSetType))
@@ -133,7 +136,7 @@ type CFindRq struct {
 	Extra               []*dicom.Element // Unparsed elements
 }
 
-func (v *CFindRq) Encode(e *dicomio.Encoder) {
+func (v *CFindRq) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(32)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -182,7 +185,7 @@ type CFindRsp struct {
 	Extra                     []*dicom.Element // Unparsed elements
 }
 
-func (v *CFindRsp) Encode(e *dicomio.Encoder) {
+func (v *CFindRsp) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(32800)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -231,7 +234,7 @@ type CGetRq struct {
 	Extra               []*dicom.Element // Unparsed elements
 }
 
-func (v *CGetRq) Encode(e *dicomio.Encoder) {
+func (v *CGetRq) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(16)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -284,7 +287,7 @@ type CGetRsp struct {
 	Extra                          []*dicom.Element // Unparsed elements
 }
 
-func (v *CGetRsp) Encode(e *dicomio.Encoder) {
+func (v *CGetRsp) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(32784)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -350,7 +353,7 @@ type CMoveRq struct {
 	Extra               []*dicom.Element // Unparsed elements
 }
 
-func (v *CMoveRq) Encode(e *dicomio.Encoder) {
+func (v *CMoveRq) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(33)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -405,7 +408,7 @@ type CMoveRsp struct {
 	Extra                          []*dicom.Element // Unparsed elements
 }
 
-func (v *CMoveRsp) Encode(e *dicomio.Encoder) {
+func (v *CMoveRsp) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(32801)))
 	elems = append(elems, newElement(dicomtag.AffectedSOPClassUID, v.AffectedSOPClassUID))
@@ -468,7 +471,7 @@ type CEchoRq struct {
 	Extra              []*dicom.Element // Unparsed elements
 }
 
-func (v *CEchoRq) Encode(e *dicomio.Encoder) {
+func (v *CEchoRq) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(48)))
 	elems = append(elems, newElement(dicomtag.MessageID, v.MessageID))
@@ -512,7 +515,7 @@ type CEchoRsp struct {
 	Extra                     []*dicom.Element // Unparsed elements
 }
 
-func (v *CEchoRsp) Encode(e *dicomio.Encoder) {
+func (v *CEchoRsp) Encode(e *dicom.Writer) {
 	elems := []*dicom.Element{}
 	elems = append(elems, newElement(dicomtag.CommandField, uint16(32816)))
 	elems = append(elems, newElement(dicomtag.MessageIDBeingRespondedTo, v.MessageIDBeingRespondedTo))

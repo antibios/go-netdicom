@@ -1,22 +1,26 @@
 package netdicom
 
 import (
+	"bytes"
+	"context"
+	"encoding/binary"
 	"errors"
 	"flag"
-	"io/ioutil"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
-	"github.com/antibios/go-dicom/dicomtag"
-	"github.com/antibios/go-dicom/dicomuid"
+	"github.com/antibios/dicom"
+	"github.com/antibios/dicom/pkg/tag"
+	"github.com/antibios/dicom/pkg/uid"
 	"github.com/antibios/go-netdicom/dimse"
 	"github.com/antibios/go-netdicom/sopclass"
 	"github.com/stretchr/testify/assert"
@@ -60,18 +64,25 @@ func onCStoreRequest(
 	calledAETitle string,
 	data []byte) dimse.Status {
 	log.Printf("Start C-STORE handler, transfersyntax=%s, sopclass=%s, sopinstance=%s",
-		dicomuid.UIDString(transferSyntaxUID),
-		dicomuid.UIDString(sopClassUID),
-		dicomuid.UIDString(sopInstanceUID))
-	e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
-	dicom.WriteFileHeader(e,
-		[]*dicom.Element{
-			dicom.MustNewElement(dicomtag.TransferSyntaxUID, transferSyntaxUID),
-			dicom.MustNewElement(dicomtag.MediaStorageSOPClassUID, sopClassUID),
-			dicom.MustNewElement(dicomtag.MediaStorageSOPInstanceUID, sopInstanceUID),
-		})
+		uid.UIDString(transferSyntaxUID),
+		uid.UIDString(sopClassUID),
+		uid.UIDString(sopInstanceUID))
+
+	/* e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+	dicom.WriteFileHeader(e, */
+	b := bytes.Buffer{}
+	e := dicom.NewWriter(&b, dicom.SkipVRVerification())
+	e.SetTransferSyntax(binary.LittleEndian, true)
+
+	for _, elem := range []*dicom.Element{
+		dicom.MustNewElement(tag.TransferSyntaxUID, transferSyntaxUID),
+		dicom.MustNewElement(tag.MediaStorageSOPClassUID, sopClassUID),
+		dicom.MustNewElement(tag.MediaStorageSOPInstanceUID, sopInstanceUID),
+	} {
+		e.WriteElement(elem)
+	}
 	e.WriteBytes(data)
-	cstoreData = e.Bytes()
+	cstoreData = data
 	log.Printf("Received C-STORE request, %d bytes", len(cstoreData))
 	return cstoreStatus
 }
@@ -86,14 +97,14 @@ func onCFindRequest(
 	found := 0
 	for _, elem := range filters {
 		log.Printf("Filter %v", elem)
-		if elem.Tag == dicomtag.QueryRetrieveLevel {
-			if elem.MustGetString() != "PATIENT" {
+		if elem.Tag == tag.QueryRetrieveLevel {
+			if elem.String() != "PATIENT" {
 				log.Panicf("Wrong QR level: %v", elem)
 			}
 			found++
 		}
-		if elem.Tag == dicomtag.PatientName {
-			if elem.MustGetString() != "foohah" {
+		if elem.Tag == tag.PatientName {
+			if elem.String() != "foohah" {
 				log.Panicf("Wrong patient name: %v", elem)
 			}
 			found++
@@ -103,10 +114,10 @@ func onCFindRequest(
 		log.Panicf("Didn't find expected filters: %v", filters)
 	}
 	ch <- CFindResult{
-		Elements: []*dicom.Element{dicom.MustNewElement(dicomtag.PatientName, "johndoe")},
+		Elements: []*dicom.Element{dicom.MustNewElement(tag.PatientName, "johndoe")},
 	}
 	ch <- CFindResult{
-		Elements: []*dicom.Element{dicom.MustNewElement(dicomtag.PatientName, "johndoe2")},
+		Elements: []*dicom.Element{dicom.MustNewElement(tag.PatientName, "johndoe2")},
 	}
 	close(ch)
 }
@@ -128,20 +139,49 @@ func onCGetRequest(
 	close(ch)
 }
 
+// Test compare elements a and b with i being an count of the element in the DICOM header.
+func compareElements(t *testing.T, a, b dicom.Element, i int) bool {
+	if a.Tag != b.Tag {
+		t.Errorf("%dth Tag element mismatch: %v <-> %v", i, a.Tag, b.Tag)
+	}
+	if a.RawValueRepresentation != b.RawValueRepresentation {
+		t.Errorf("%dth Tag Representation mismatch: %v <-> %v", i, b.RawValueRepresentation, b.RawValueRepresentation)
+	}
+
+	if a.RawValueRepresentation == "SQ" {
+		as := a.Value.GetValue().([]*dicom.SequenceItemValue)
+		bs := b.Value.GetValue().([]*dicom.SequenceItemValue)
+		if len(as) != len(bs) {
+			t.Errorf("Sequence length incorrect %v <-> %v", as, bs)
+		}
+		for j, _ := range as {
+			for n, _ := range as[j].GetValue().([]*dicom.Element) {
+				compareElements(t, *as[j].GetValue().([]*dicom.Element)[n], *bs[j].GetValue().([]*dicom.Element)[n], n)
+
+			}
+		}
+		//Now check Value
+	} else if !reflect.DeepEqual(a.Value.GetValue(), b.Value.GetValue()) {
+		t.Errorf("%dth Value element mismatch: %v <-> %v", i, a.Value.GetValue(), b.Value.GetValue())
+	}
+	return true
+}
+
 // Check that two datasets, "in" and "out" are the same, except for metadata
 // elements.
-func checkFileBodiesEqual(t *testing.T, in, out *dicom.DataSet) {
+func checkFileBodiesEqual(t *testing.T, in, out *dicom.Dataset) {
 	// DCMTK arbitrarily changes the sequences and items to use
 	// undefined-length encoding, so ignore such diffs.
-	var normalize = func(s string) string {
+	/* 	var normalize = func(s string) string {
 		s = strings.Replace(s, "NA u", "NA ", -1)
 		s = strings.Replace(s, "SQ u", "SQ ", -1)
 		return s
-	}
-	var removeMetaElems = func(f *dicom.DataSet) []*dicom.Element {
+	} */
+
+	var removeMetaElems = func(f *dicom.Dataset) []*dicom.Element {
 		var elems []*dicom.Element
 		for _, elem := range f.Elements {
-			if elem.Tag.Group != dicomtag.MetadataGroup {
+			if elem.Tag.Group != tag.MetadataGroup {
 				elems = append(elems, elem)
 			}
 		}
@@ -152,32 +192,38 @@ func checkFileBodiesEqual(t *testing.T, in, out *dicom.DataSet) {
 	outElems := removeMetaElems(out)
 	assert.Equal(t, len(inElems), len(outElems))
 	for i := 0; i < len(inElems); i++ {
-		ins := normalize(inElems[i].String())
-		outs := normalize(outElems[i].String())
-		if ins != outs {
-			t.Errorf("%dth element mismatch: %v <-> %v", i, ins, outs)
-		}
+		/* 		ins := normalize(inElems[i].String())
+		   		outs := normalize(outElems[i].String())
+		   		if ins != outs {
+		   			t.Errorf("%dth element mismatch: %v <-> %v", i, ins, outs)
+		   		}
+		*/
+		//Tag
+		compareElements(t, *inElems[i], *outElems[i], i)
 	}
 }
 
 // Get the dataset received by the cstore handler.
-func getCStoreData() (*dicom.DataSet, error) {
+func getCStoreData() (*dicom.Dataset, error) {
 	if len(cstoreData) == 0 {
 		return nil, errors.New("Did not receive C-STORE data")
 	}
-	f, err := dicom.ReadDataSetInBytes(cstoreData, dicom.ReadOptions{})
+	//f, err := dicom.ReadDataSetInBytes(cstoreData, dicom.ReadOptions{})
+	//reader := bytes.NewReader(cstoreData)
+	//f, err := dicom.ParseUntilEOF(reader, nil, dicom.SkipMetadataReadOnNewParserInit())
+	f, err := dicom.ReadDataSetInBytes(&cstoreData, dicom.SkipMetadataReadOnNewParserInit())
 	if err != nil {
 		return nil, err
 	}
-	return f, nil
+	return &f, nil
 }
 
-func mustReadDICOMFile(path string) *dicom.DataSet {
-	dataset, err := dicom.ReadDataSetFromFile(path, dicom.ReadOptions{})
+func mustReadDICOMFile(path string) *dicom.Dataset {
+	dataset, err := dicom.ParseFile(path, nil)
 	if err != nil {
 		log.Panic(err)
 	}
-	return dataset
+	return &dataset
 }
 
 func mustNewServiceUser(t *testing.T, sopClasses []string) *ServiceUser {
@@ -224,6 +270,51 @@ func getProviderPort() string {
 	return match[1]
 }
 
+func TestDCMTKEcho(t *testing.T) {
+	echoscuPath, err := exec.LookPath("echoscu")
+	if err != nil {
+		t.Skip("echoscu not found.")
+		return
+	}
+	cstoreData = nil
+	cmd := exec.Command(echoscuPath, "localhost", getProviderPort())
+	require.NoError(t, cmd.Run())
+
+}
+
+func waitForDicomSuccess() bool {
+	// Set a timeout of 3 seconds
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		for {
+			// Test your condition here
+			// ...
+			if cstoreStatus == dimse.Success {
+				cancel() // Cancel the context if the condition becomes true
+				return
+			}
+			select {
+			case <-ctx.Done():
+				fmt.Println("cstoreStatus not met within timeout: ", cstoreStatus)
+				return
+			case <-time.After(100 * time.Millisecond):
+				// Do nothing, loop continues checking the condition
+			}
+		}
+	}()
+
+	// Wait for the goroutine to finish
+	<-ctx.Done()
+
+	if cstoreStatus == dimse.Success {
+		fmt.Println("Condition became true within timeout")
+		return true
+	}
+	return false
+}
+
 // Test using "storescu" command from dcmtk.
 func TestDCMTKCStore(t *testing.T) {
 	storescuPath, err := exec.LookPath("storescu")
@@ -234,17 +325,17 @@ func TestDCMTKCStore(t *testing.T) {
 	cstoreData = nil
 	cmd := exec.Command(storescuPath, "localhost", getProviderPort(), "testdata/reportsi.dcm")
 	require.NoError(t, cmd.Run())
-
+	require.True(t, waitForDicomSuccess() == true, "No sucessful send")
 	require.True(t, len(cstoreData) > 0, "No data received")
-	ds, err := dicom.ReadDataSetInBytes(cstoreData, dicom.ReadOptions{})
+	ds, err := dicom.ReadDataSetInBytes(&cstoreData)
 	require.NoError(t, err)
 	expected := mustReadDICOMFile("testdata/reportsi.dcm")
-	checkFileBodiesEqual(t, expected, ds)
+	checkFileBodiesEqual(t, expected, &ds)
 }
 
 // Test using "getscu" command from dcmtk.
 func TestDCMTKCGet(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "")
+	tempDir, err := os.MkdirTemp("", "")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 	getscuPath, err := exec.LookPath("getscu")
@@ -257,14 +348,15 @@ func TestDCMTKCGet(t *testing.T) {
 	require.NoError(t, cmd.Run())
 	require.NoError(t, err)
 
-	files, err := ioutil.ReadDir(tempDir)
+	files, err := os.ReadDir(tempDir)
 	require.NoError(t, err)
 	require.Equal(t, len(files), 1)
 	t.Logf("Found C-GET file %v/%v", tempDir, files[0].Name())
 	expected := mustReadDICOMFile("testdata/reportsi.dcm")
-	ds, err := dicom.ReadDataSetFromFile(filepath.Join(tempDir, files[0].Name()), dicom.ReadOptions{})
+	ds, err := dicom.ParseFile(filepath.Join(tempDir, files[0].Name()), nil, nil)
+	//ds, err := dicom.ReadDataSetFromFile(filepath.Join(tempDir, files[0].Name()), dicom.ReadOptions{})
 	require.NoError(t, err)
-	checkFileBodiesEqual(t, expected, ds)
+	checkFileBodiesEqual(t, expected, &ds)
 }
 
 type testFaultInjector struct {
@@ -299,7 +391,7 @@ func TestStoreFailure1(t *testing.T) {
 	su := mustNewServiceUser(t, sopclass.StorageClasses)
 	defer su.Release()
 	err := su.CStore(dataset)
-	if err == nil || strings.Index(err.Error(), "Connection closed") < 0 {
+	if err == nil || strings.Index(err.Error(), "Connection failed") < 0 {
 		log.Panic(err)
 	}
 }
@@ -320,7 +412,7 @@ func TestFind(t *testing.T) {
 	su := mustNewServiceUser(t, sopclass.QRFindClasses)
 	defer su.Release()
 	filter := []*dicom.Element{
-		dicom.MustNewElement(dicomtag.PatientName, "foohah"),
+		dicom.MustNewElement(tag.PatientName, "foohah"),
 	}
 	var namesFound []string
 
@@ -331,10 +423,10 @@ func TestFind(t *testing.T) {
 			continue
 		}
 		for _, elem := range result.Elements {
-			if elem.Tag != dicomtag.PatientName {
+			if elem.Tag != tag.PatientName {
 				t.Error(elem)
 			}
-			namesFound = append(namesFound, elem.MustGetString())
+			namesFound = append(namesFound, elem.Value.GetValue().(string))
 		}
 	}
 	if len(namesFound) != 2 || namesFound[0] != "johndoe" || namesFound[1] != "johndoe2" {
@@ -346,7 +438,7 @@ func TestCGet(t *testing.T) {
 	su := mustNewServiceUser(t, sopclass.QRGetClasses)
 	defer su.Release()
 	filter := []*dicom.Element{
-		dicom.MustNewElement(dicomtag.PatientName, "foohah"),
+		dicom.MustNewElement(tag.PatientName, "foohah"),
 	}
 
 	var cgetData []byte
@@ -355,23 +447,27 @@ func TestCGet(t *testing.T) {
 		func(transferSyntaxUID, sopClassUID, sopInstanceUID string, data []byte) dimse.Status {
 			log.Printf("Got data: %v %v %v %d bytes", transferSyntaxUID, sopClassUID, sopInstanceUID, len(data))
 			require.True(t, len(cgetData) == 0, "Received multiple C-GET responses")
-			e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
-			dicom.WriteFileHeader(e,
-				[]*dicom.Element{
-					dicom.MustNewElement(dicomtag.TransferSyntaxUID, transferSyntaxUID),
-					dicom.MustNewElement(dicomtag.MediaStorageSOPClassUID, sopClassUID),
-					dicom.MustNewElement(dicomtag.MediaStorageSOPInstanceUID, sopInstanceUID),
-				})
-			e.WriteBytes(data)
-			cgetData = e.Bytes()
+			/* e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+			dicom.WriteFileHeader(e, */
+			b := bytes.Buffer{}
+			e := dicom.NewWriter(&b, dicom.SkipVRVerification())
+			for _, elem := range []*dicom.Element{
+				dicom.MustNewElement(tag.TransferSyntaxUID, transferSyntaxUID),
+				dicom.MustNewElement(tag.MediaStorageSOPClassUID, sopClassUID),
+				dicom.MustNewElement(tag.MediaStorageSOPInstanceUID, sopInstanceUID),
+			} {
+				e.WriteElement(elem)
+			}
+			//e.WriteBytes(data)
+			cgetData = b.Bytes()
 			return dimse.Success
 		})
 	require.NoError(t, err)
 	require.True(t, len(cgetData) > 0, "No data received")
-	ds, err := dicom.ReadDataSetInBytes(cgetData, dicom.ReadOptions{})
+	ds, err := dicom.ReadDataSetInBytes(&cgetData, nil)
 	require.NoError(t, err)
 	expected := mustReadDICOMFile("testdata/reportsi.dcm")
-	checkFileBodiesEqual(t, expected, ds)
+	checkFileBodiesEqual(t, expected, &ds)
 }
 
 func TestReleaseWithoutConnect(t *testing.T) {
@@ -393,4 +489,4 @@ func TestNonexistentServer(t *testing.T) {
 	}
 }
 
-// TODO(saito) Test that the state machine shuts down propelry.
+// TODO(saito) Test that the state machine shuts down properly.

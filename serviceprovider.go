@@ -3,12 +3,13 @@
 package netdicom
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
 	"net"
 
-	dicom "github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
+	dicom "github.com/antibios/dicom"
 	"github.com/antibios/go-dicom/dicomlog"
 	"github.com/antibios/go-netdicom/dimse"
 	"github.com/antibios/go-netdicom/sopclass"
@@ -19,7 +20,7 @@ type CMoveResult struct {
 	Remaining int // Number of files remaining to be sent. Set -1 if unknown.
 	Err       error
 	Path      string         // Path name of the DICOM file being copied. Used only for reporting errors.
-	DataSet   *dicom.DataSet // Contents of the file.
+	DataSet   *dicom.Dataset // Contents of the file.
 }
 
 func handleCStore(
@@ -408,31 +409,45 @@ type ServiceProvider struct {
 }
 
 func writeElementsToBytes(elems []*dicom.Element, transferSyntaxUID string) ([]byte, error) {
-	dataEncoder := dicomio.NewBytesEncoderWithTransferSyntax(transferSyntaxUID)
+	/* 	dataEncoder := dicomio.NewBytesEncoderWithTransferSyntax(transferSyntaxUID)
+	   	for _, elem := range elems {
+	   		dicom.WriteElement(dataEncoder, elem)
+	   	}
+	   	if err := dataEncoder.Error(); err != nil {
+	   		return nil, err
+	   	}
+	   	return dataEncoder.Bytes(), nil */
+	b := bytes.Buffer{}
+	e := dicom.NewWriter(&b, dicom.SkipVRVerification())
+	e.SetTransferSyntax(binary.LittleEndian, true)
 	for _, elem := range elems {
-		dicom.WriteElement(dataEncoder, elem)
+		e.WriteElement(elem)
 	}
-	if err := dataEncoder.Error(); err != nil {
-		return nil, err
-	}
-	return dataEncoder.Bytes(), nil
+	return b.Bytes(), nil
 }
 
 func readElementsInBytes(data []byte, transferSyntaxUID string) ([]*dicom.Element, error) {
-	decoder := dicomio.NewBytesDecoderWithTransferSyntax(data, transferSyntaxUID)
-	var elems []*dicom.Element
-	for !decoder.EOF() {
-		elem := dicom.ReadElement(decoder, dicom.ReadOptions{})
-		dicomlog.Vprintf(1, "dicom.serviceProvider: C-FIND: Read elem: %v, err %v", elem, decoder.Error())
-		if decoder.Error() != nil {
-			break
+	/*	decoder := dicomio.NewBytesDecoderWithTransferSyntax(data, transferSyntaxUID)
+
+		var elems []*dicom.Element
+		for !decoder.EOF() {
+			elem := dicom.ReadElement(decoder, dicom.ReadOptions{})
+			dicomlog.Vprintf(1, "dicom.serviceProvider: C-FIND: Read elem: %v, err %v", elem, decoder.Error())
+			if decoder.Error() != nil {
+				break
+			}
+			elems = append(elems, elem)
 		}
-		elems = append(elems, elem)
+		if decoder.Error() != nil {
+			return nil, decoder.Error()
+		}
+		return elems, nil
+	*/
+	dataset, err := dicom.ReadDataSetInBytes(&data, nil)
+	if err != nil {
+		return nil, err
 	}
-	if decoder.Error() != nil {
-		return nil, decoder.Error()
-	}
-	return elems, nil
+	return dataset.Elements, nil
 }
 
 func elementsString(elems []*dicom.Element) string {
@@ -447,7 +462,7 @@ func elementsString(elems []*dicom.Element) string {
 }
 
 // Send "ds" to remoteHostPort using C-STORE. Called as part of C-MOVE.
-func runCStoreOnNewAssociation(myAETitle, remoteAETitle, remoteHostPort string, ds *dicom.DataSet) error {
+func runCStoreOnNewAssociation(myAETitle, remoteAETitle, remoteHostPort string, ds *dicom.Dataset) error {
 	su, err := NewServiceUser(ServiceUserParams{
 		CalledAETitle:  remoteAETitle,
 		CallingAETitle: myAETitle,

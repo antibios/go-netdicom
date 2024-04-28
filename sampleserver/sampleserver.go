@@ -9,6 +9,7 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -20,10 +21,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
-	"github.com/antibios/go-dicom/dicomtag"
-	"github.com/antibios/go-dicom/dicomuid"
+	"github.com/antibios/dicom"
+	"github.com/antibios/dicom/pkg/tag"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
+	"github.com/antibios/go-dicom/dicomlog"
 	"github.com/antibios/go-netdicom"
 	"github.com/antibios/go-netdicom/dimse"
 )
@@ -52,7 +53,7 @@ type server struct {
 
 	// Set of dicom files the server manages. Keys are file paths.  Guarded
 	// by mu.
-	datasets map[string]*dicom.DataSet
+	datasets map[string]*dicom.Dataset
 
 	// For generating new unique path in C-STORE. Guarded by mu.
 	pathSeq int32
@@ -88,18 +89,37 @@ func (ss *server) onCStore(
 			out.Close()
 		}
 	}()
-	e := dicomio.NewEncoderWithTransferSyntax(out, transferSyntaxUID)
-	dicom.WriteFileHeader(e,
-		[]*dicom.Element{
-			dicom.MustNewElement(dicomtag.TransferSyntaxUID, transferSyntaxUID),
-			dicom.MustNewElement(dicomtag.MediaStorageSOPClassUID, sopClassUID),
-			dicom.MustNewElement(dicomtag.MediaStorageSOPInstanceUID, sopInstanceUID),
-		})
-	e.WriteBytes(data)
-	if err := e.Error(); err != nil {
+	/* 	e := dicomio.NewWriter(out, binary.LittleEndian, false)
+	   	//e := dicomio.NewEncoderWithTransferSyntax(out, transferSyntaxUID)
+	   	for _, elem := range []*dicom.Element{
+	   		dicom.MustNewElement(tag.TransferSyntaxUID, transferSyntaxUID),
+	   		dicom.MustNewElement(tag.MediaStorageSOPClassUID, sopClassUID),
+	   		dicom.MustNewElement(tag.MediaStorageSOPInstanceUID, sopInstanceUID),
+	   	} {
+	   		//e.WriteElement(elem)
+	   		//out.Write(elem.)
+	   		e.WriteBytes([]byte(elem.RawValueRepresentation))
+
+	   	} */
+	//err = e.WriteBytes(data)
+	e := dicom.NewWriter(out, dicom.DefaultMissingTransferSyntax())
+	e.SetTransferSyntax(binary.LittleEndian, true)
+	header := dicom.Dataset{
+		Elements: []*dicom.Element{
+			dicom.MustNewElement(tag.TransferSyntaxUID, transferSyntaxUID),
+			dicom.MustNewElement(tag.MediaStorageSOPClassUID, sopClassUID),
+			dicom.MustNewElement(tag.MediaStorageSOPInstanceUID, sopInstanceUID),
+		}}
+	//e.WriteElement()
+	err = e.WriteDataset(&header)
+	if err != nil {
 		log.Printf("%s: write: %v", path, err)
 		return dimse.Status{Status: dimse.StatusNotAuthorized, ErrorComment: err.Error()}
 	}
+
+	//TODO write bytes to output file:
+	err = e.WriteBytes(data)
+
 	err = out.Close()
 	out = nil
 	if err != nil {
@@ -108,11 +128,12 @@ func (ss *server) onCStore(
 	}
 	log.Printf("C-STORE: Created %v", path)
 	// Register the new file in ss.datasets.
-	ds, err := dicom.ReadDataSetFromFile(path, dicom.ReadOptions{DropPixelData: true})
+	//ds, err := dicom.ReadDataSetFromFile(path, dicom.ReadOptions{DropPixelData: true})
+	ds, err := dicom.ParseFile(path, nil, dicom.SkipProcessingPixelDataValue())
 	if err != nil {
 		log.Printf("%s: failed to parse dicom file: %v", path, err)
 	} else {
-		ss.datasets[path] = ds
+		ss.datasets[path] = &ds
 	}
 	return dimse.Success
 }
@@ -126,42 +147,44 @@ type filterMatch struct {
 // "filters" are matching conditions specified in C-{FIND,GET,MOVE}. This
 // function returns the list of datasets and their elements that match filters.
 func (ss *server) findMatchingFiles(filters []*dicom.Element) ([]filterMatch, error) {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
+	/* 	ss.mu.Lock()
+	   	defer ss.mu.Unlock()
 
-	var matches []filterMatch
-	for path, ds := range ss.datasets {
-		allMatched := true
-		match := filterMatch{path: path}
-		for _, filter := range filters {
-			ok, elem, err := dicom.Query(ds, filter)
-			if err != nil {
-				return matches, err
-			}
-			if !ok {
-				log.Printf("DS: %s: filter %v missed", path, filter)
-				allMatched = false
-				break
-			}
-			if elem != nil {
-				match.elems = append(match.elems, elem)
-			} else {
-				elem, err := dicom.NewElement(filter.Tag)
-				if err != nil {
-					log.Println(err)
-					return matches, err
-				}
-				match.elems = append(match.elems, elem)
-			}
-		}
-		if allMatched {
-			if len(match.elems) == 0 {
-				panic(match)
-			}
-			matches = append(matches, match)
-		}
-	}
-	return matches, nil
+	   	var matches []filterMatch
+	   	for path, ds := range ss.datasets {
+	   		allMatched := true
+	   		match := filterMatch{path: path}
+	   		for _, filter := range filters {
+	   			ok, elem, err := dicom.Query(ds, filter)
+
+	   			if err != nil {
+	   				return matches, err
+	   			}
+	   			if !ok {
+	   				log.Printf("DS: %s: filter %v missed", path, filter)
+	   				allMatched = false
+	   				break
+	   			}
+	   			if elem != nil {
+	   				match.elems = append(match.elems, elem)
+	   			} else {
+	   				elem, err := dicom.NewElement(filter.Tag, nil) //Does nil work here?
+	   				if err != nil {
+	   					log.Println(err)
+	   					return matches, err
+	   				}
+	   				match.elems = append(match.elems, elem)
+	   			}
+	   		}
+	   		if allMatched {
+	   			if len(match.elems) == 0 {
+	   				panic(match)
+	   			}
+	   			matches = append(matches, match)
+	   		}
+	   	}
+	   	return matches, nil */
+	return nil, nil
 }
 
 func (ss *server) onCFind(
@@ -209,7 +232,8 @@ func (ss *server) onCMoveOrCGet(
 		for i, match := range matches {
 			log.Printf("C-MOVE resp %d %s: %v", i, match.path, match.elems)
 			// Read the file; the one in ss.datasets lack the PixelData.
-			ds, err := dicom.ReadDataSetFromFile(match.path, dicom.ReadOptions{})
+			//ds, err := dicom.ReadDataSetFromFile(match.path, dicom.ReadOptions{})
+			ds, err := dicom.ParseFile(match.path, nil, nil)
 			resp := netdicom.CMoveResult{
 				Remaining: len(matches) - i - 1,
 				Path:      match.path,
@@ -217,7 +241,7 @@ func (ss *server) onCMoveOrCGet(
 			if err != nil {
 				resp.Err = err
 			} else {
-				resp.DataSet = ds
+				resp.DataSet = &ds
 			}
 			ch <- resp
 		}
@@ -227,19 +251,20 @@ func (ss *server) onCMoveOrCGet(
 
 // Find DICOM files in or under "dir" and read its attributes. The return value
 // is a map from a pathname to dicom.Dataset (excluding PixelData).
-func listDicomFiles(dir string) (map[string]*dicom.DataSet, error) {
-	datasets := make(map[string]*dicom.DataSet)
+func listDicomFiles(dir string) (map[string]*dicom.Dataset, error) {
+	datasets := make(map[string]*dicom.Dataset)
 	readFile := func(path string) {
 		if _, ok := datasets[path]; ok {
 			return
 		}
-		ds, err := dicom.ReadDataSetFromFile(path, dicom.ReadOptions{DropPixelData: true})
+		//ds, err := dicom.ReadDataSetFromFile(path, dicom.ReadOptions{DropPixelData: true})
+		ds, err := dicom.ParseFile(path, nil, dicom.SkipProcessingPixelDataValue())
 		if err != nil {
 			log.Printf("%s: failed to parse dicom file: %v", path, err)
 			return
 		}
 		log.Printf("%s: read dicom file", path)
-		datasets[path] = ds
+		datasets[path] = &ds
 	}
 	walkCallback := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -367,6 +392,7 @@ func main() {
 		},
 		TLSConfig: tlsConfig,
 	}
+	dicomlog.SetLevel(2)
 	sp, err := netdicom.NewServiceProvider(params, port)
 	if err != nil {
 		panic(err)

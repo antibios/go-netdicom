@@ -1,7 +1,7 @@
 package sopclass
 
 import (
-	"github.com/antibios/go-dicom/dicomuid"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
 )
 
 // DICOM SOP UID listing.

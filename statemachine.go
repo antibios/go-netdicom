@@ -4,15 +4,17 @@ package netdicom
 // http://dicom.nema.org/medical/dicom/current/output/pdf/part08.pdf
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"strings"
 	"time"
 
-	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/dicom"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
 	"github.com/antibios/go-dicom/dicomlog"
-	"github.com/antibios/go-dicom/dicomuid"
 	"github.com/antibios/go-netdicom/dimse"
 	"github.com/antibios/go-netdicom/pdu"
 )
@@ -318,13 +320,16 @@ var actionDt1 = &stateAction{"DT-1", "Send P-DATA-TF PDU",
 		doassert(event.dimsePayload != nil)
 		command := event.dimsePayload.command
 		doassert(command != nil)
-		e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+		//e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+		b := bytes.Buffer{}
+		e := dicom.NewWriter(&b, dicom.SkipVRVerification())
+		e.SetTransferSyntax(binary.LittleEndian, true)
 		dimse.EncodeMessage(e, command)
-		if e.Error() != nil {
+		/* if e.Error() != nil {
 			panic(fmt.Sprintf("Failed to encode DIMSE cmd %v: %v", command, e.Error()))
-		}
+		} */
 		dicomlog.Vprintf(1, "dicom.stateMachine(%s): Send DIMSE msg: %v", sm.label, command)
-		pdus := splitDataIntoPDUs(sm, event.dimsePayload.abstractSyntaxName, true /*command*/, e.Bytes())
+		pdus := splitDataIntoPDUs(sm, event.dimsePayload.abstractSyntaxName, true /*command*/, b.Bytes())
 		for _, pdu := range pdus {
 			sendPDU(sm, &pdu)
 		}
@@ -401,12 +406,16 @@ var actionAr7 = &stateAction{"AR-7", "Issue P-DATA-TF PDU",
 		doassert(event.dimsePayload != nil)
 		command := event.dimsePayload.command
 		doassert(command != nil)
-		e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+		/*		e := dicomio.NewBytesEncoder(nil, dicomio.UnknownVR)
+				dimse.EncodeMessage(e, command)
+				if e.Error() != nil {
+					panic(fmt.Sprintf("dicom.StateMachine %s: Failed to encode DIMSE cmd %v: %v", sm.label, command, e.Error()))
+				} */
+		b := bytes.Buffer{}
+		e := dicom.NewWriter(&b, dicom.SkipVRVerification())
+		e.SetTransferSyntax(binary.LittleEndian, true)
 		dimse.EncodeMessage(e, command)
-		if e.Error() != nil {
-			panic(fmt.Sprintf("dicom.StateMachine %s: Failed to encode DIMSE cmd %v: %v", sm.label, command, e.Error()))
-		}
-		pdus := splitDataIntoPDUs(sm, event.dimsePayload.abstractSyntaxName, true /*command*/, e.Bytes())
+		pdus := splitDataIntoPDUs(sm, event.dimsePayload.abstractSyntaxName, true /*command*/, b.Bytes())
 		for _, pdu := range pdus {
 			sendPDU(sm, &pdu)
 		}
@@ -789,6 +798,7 @@ func sendPDU(sm *stateMachine, v pdu.PDU) {
 		sm.errorCh <- stateEvent{event: evt17, err: err}
 		return
 	}
+
 	dicomlog.Vprintf(2, "dicom.StateMachine %s: sendPDU: %v", sm.label, v.String())
 }
 
@@ -817,10 +827,11 @@ func networkReaderThread(ch chan stateEvent, conn net.Conn, maxPDUSize int, smNa
 	for {
 		v, err := pdu.ReadPDU(conn, maxPDUSize)
 		if err != nil {
-			dicomlog.Vprintf(0, "dicom.StateMachine %s: Failed to read PDU: %v", smName, err)
-			if err == io.EOF {
+			if err == io.EOF || strings.Contains(err.Error(), "EOF") {
+				dicomlog.Vprintf(0, "dicom.StateMachine %s: Finished reading PDU: %v", smName, err)
 				ch <- stateEvent{event: evt17, pdu: nil, err: nil}
 			} else {
+				dicomlog.Vprintf(0, "dicom.StateMachine %s: Failed to read PDU: %v", smName, err)
 				ch <- stateEvent{event: evt19, pdu: nil, err: err}
 			}
 			close(ch)

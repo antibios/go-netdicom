@@ -4,9 +4,10 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomtag"
+	"github.com/antibios/dicom"
+	dicomtag "github.com/antibios/dicom/pkg/tag"
 	"github.com/antibios/go-netdicom"
 	"github.com/antibios/go-netdicom/dimse"
 	"github.com/antibios/go-netdicom/sopclass"
@@ -39,11 +40,21 @@ func newServiceUser(sopClasses []string) *netdicom.ServiceUser {
 func cStore(inPath string) {
 	su := newServiceUser(sopclass.StorageClasses)
 	defer su.Release()
-	dataset, err := dicom.ReadDataSetFromFile(inPath, dicom.ReadOptions{})
+
+	f, err := os.Open(inPath)
 	if err != nil {
-		log.Panicf("%s: %v", inPath, err)
+		log.Fatalf("Unable to open %s. Error: %v", f.Name(), err)
 	}
-	err = su.CStore(dataset)
+
+	dataset, err := dicom.ParseUntilEOF(f, nil, dicom.SkipMetadataReadOnNewParserInit())
+	if err != nil {
+		log.Fatalf("dicom.Parse(%s) unexpected error: %v", f.Name(), err)
+	}
+	/* 	dataset, err := dicom.ReadDataSetFromFile(inPath, dicom.ReadOptions{})
+	   	if err != nil {
+	   		log.Panicf("%s: %v", inPath, err)
+	   	} */
+	err = su.CStore(&dataset)
 	if err != nil {
 		log.Panicf("%s: cstore failed: %v", inPath, err)
 	}
@@ -67,13 +78,13 @@ func generateCFindElements() (netdicom.QRLevel, []*dicom.Element) {
 		dicom.MustNewElement(dicomtag.PatientSex, ""),
 		dicom.MustNewElement(dicomtag.StudyInstanceUID, ""),
 		dicom.MustNewElement(dicomtag.RequestedProcedureDescription, ""),
-		dicom.MustNewElement(dicomtag.ScheduledProcedureStepSequence,
-			dicom.MustNewElement(dicomtag.Item,
-				dicom.MustNewElement(dicomtag.Modality, ""),
-				dicom.MustNewElement(dicomtag.ScheduledProcedureStepStartDate, ""),
-				dicom.MustNewElement(dicomtag.ScheduledProcedureStepStartTime, ""),
-				dicom.MustNewElement(dicomtag.ScheduledPerformingPhysicianName, ""),
-				dicom.MustNewElement(dicomtag.ScheduledProcedureStepStatus, ""))),
+		//dicom.MustNewElement(dicomtag.ScheduledProcedureStepSequence,
+		//dicom.MustNewElement(dicomtag.Item,
+		//	dicom.MustNewElement(dicomtag.Modality, ""),
+		//	dicom.MustNewElement(dicomtag.ScheduledProcedureStepStartDate, ""),
+		//	dicom.MustNewElement(dicomtag.ScheduledProcedureStepStartTime, ""),
+		//	dicom.MustNewElement(dicomtag.ScheduledPerformingPhysicianName, ""),
+		//	dicom.MustNewElement(dicomtag.ScheduledProcedureStepStatus, ""))),
 	}
 	return netdicom.QRLevelPatient, args
 }

@@ -8,21 +8,22 @@ package dimse
 // http://dicom.nema.org/medical/dicom/current/output/pdf/part07.pdf
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"sort"
 
-	dicom "github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
+	dicom "github.com/antibios/dicom"
+	dicomtag "github.com/antibios/dicom/pkg/tag"
 	"github.com/antibios/go-dicom/dicomlog"
-	"github.com/antibios/go-dicom/dicomtag"
 	"github.com/antibios/go-netdicom/pdu"
 )
 
 // Message defines the common interface for all DIMSE message types.
 type Message interface {
 	fmt.Stringer // Print human-readable description for debugging.
-	Encode(*dicomio.Encoder)
+	Encode(*dicom.Writer)
 	// GetMessageID extracts the message ID field.
 	GetMessageID() MessageID
 	// CommandField returns the command field value of this message.
@@ -46,7 +47,7 @@ type Status struct {
 
 // Helper class for extracting values from a list of DicomElement.
 type messageDecoder struct {
-	elems  []*dicom.Element
+	elems  *dicom.Dataset
 	parsed []bool // true if this element was parsed into a message field.
 	err    error
 }
@@ -67,7 +68,7 @@ func (d *messageDecoder) setError(err error) {
 // Find an element with the given tag. If optional==OptionalElement, returns nil
 // if not found.  If optional==RequiredElement, sets d.err and return nil if not found.
 func (d *messageDecoder) findElement(tag dicomtag.Tag, optional isOptionalElement) *dicom.Element {
-	for i, elem := range d.elems {
+	for i, elem := range d.elems.Elements {
 		if elem.Tag == tag {
 			dicomlog.Vprintf(3, "dimse.findElement: Return %v for %s", elem, tag.String())
 			d.parsed[i] = true
@@ -82,11 +83,6 @@ func (d *messageDecoder) findElement(tag dicomtag.Tag, optional isOptionalElemen
 
 // Return the list of elements that did not match any of the prior getXXX calls.
 func (d *messageDecoder) unparsedElements() (unparsed []*dicom.Element) {
-	for i, parsed := range d.parsed {
-		if !parsed {
-			unparsed = append(unparsed, d.elems[i])
-		}
-	}
 	return unparsed
 }
 
@@ -102,11 +98,12 @@ func (d *messageDecoder) getString(tag dicomtag.Tag, optional isOptionalElement)
 	if e == nil {
 		return ""
 	}
-	v, err := e.GetString()
-	if err != nil {
-		d.setError(err)
+	s := dicom.MustGetStrings(e.Value)
+	if len(s) == 0 {
+		return ""
+	} else {
+		return s[0]
 	}
-	return v
 }
 
 // Find an element with "tag", and extract a uint16 from it. Errors are reported in d.err.
@@ -115,20 +112,31 @@ func (d *messageDecoder) getUInt16(tag dicomtag.Tag, optional isOptionalElement)
 	if e == nil {
 		return 0
 	}
-	v, err := e.GetUInt16()
-	if err != nil {
-		d.setError(err)
+
+	var v []int
+	var err error
+	if e.Value.ValueType() == dicom.Ints {
+		v = dicom.MustGetInts(e.Value)
+		if len(v) == 0 {
+			return 0
+		}
+		if v[0] < 0 || v[0] > 65535 {
+			d.setError(fmt.Errorf("Returned value not a Uint16 %v", v))
+			return 0
+		}
+		return uint16(v[0])
 	}
-	return v
+	d.setError(err)
+	return 0
 }
 
 // Encode the given elements. The elements are sorted in ascending tag order.
-func encodeElements(e *dicomio.Encoder, elems []*dicom.Element) {
+func encodeElements(e *dicom.Writer, elems []*dicom.Element) {
 	sort.Slice(elems, func(i, j int) bool {
 		return elems[i].Tag.Compare(elems[j].Tag) < 0
 	})
 	for _, elem := range elems {
-		dicom.WriteElement(e, elem)
+		e.WriteElement(elem)
 	}
 }
 
@@ -144,11 +152,17 @@ func newStatusElements(s Status) []*dicom.Element {
 
 // Create a new element. The value type must match the tag's.
 func newElement(tag dicomtag.Tag, v interface{}) *dicom.Element {
+	value, err := dicom.NewValue(v)
+	if err != nil {
+		log.Println(fmt.Errorf("error creating value: %w", err))
+	}
+
 	return &dicom.Element{
-		Tag:             tag,
-		VR:              "", // autodetect
-		UndefinedLength: false,
-		Value:           []interface{}{v},
+		Tag:                    tag,
+		ValueRepresentation:    0,
+		RawValueRepresentation: "",
+		ValueLength:            0,
+		Value:                  value,
 	}
 }
 
@@ -199,55 +213,65 @@ const (
 
 // ReadMessage constructs a typed dimse.Message object, given a set of
 // dicom.Elements,
-func ReadMessage(d *dicomio.Decoder) Message {
+func ReadMessage(d dicom.Dataset) Message {
 	// A DIMSE message is a sequence of Elements, encoded in implicit
 	// LE.
 	//
 	// TODO(saito) make sure that's the case. Where the ref?
-	var elems []*dicom.Element
-	d.PushTransferSyntax(binary.LittleEndian, dicomio.ImplicitVR)
-	defer d.PopTransferSyntax()
-	for !d.EOF() {
-		elem := dicom.ReadElement(d, dicom.ReadOptions{})
-		if d.Error() != nil {
-			break
-		}
-		elems = append(elems, elem)
-	}
+	//var elems dicom.Dataset
+	/* 	d.SetTransferSyntax(binary.LittleEndian, true) */
+
+	//d.PushTransferSyntax(binary.LittleEndian, dicomio.ImplicitVR)
+	//TODO dicomio/buffer.go tracks the previous transfer syntax and
+	//allows you to return to the previous state.
+	//defer d.PopTransferSyntax()
+
+	/* 	elems, err := dicom.Parse(d, 64, nil, nil)
+	   	if err != nil {
+	   		log.Printf("(ReadMessage) Parsing Dicom ", err)
+	   	} */
 
 	// Convert elems[] into a golang struct.
 	dd := messageDecoder{
-		elems:  elems,
-		parsed: make([]bool, len(elems)),
+		elems:  &d,
+		parsed: make([]bool, len(d.Elements)),
 		err:    nil,
 	}
 	commandField := dd.getUInt16(dicomtag.CommandField, requiredElement)
 	if dd.err != nil {
-		d.SetError(dd.err)
+		log.Println(dd.err)
 		return nil
 	}
 	v := decodeMessageForType(&dd, commandField)
 	if dd.err != nil {
-		d.SetError(dd.err)
+		log.Println(dd.err)
 		return nil
 	}
 	return v
 }
 
 // EncodeMessage serializes the given message. Errors are reported through e.Error()
-func EncodeMessage(e *dicomio.Encoder, v Message) {
+func EncodeMessage(e *dicom.Writer, v Message) {
 	// DIMSE messages are always encoded Implicit+LE. See P3.7 6.3.1.
-	subEncoder := dicomio.NewBytesEncoder(binary.LittleEndian, dicomio.ImplicitVR)
+	b := new(bytes.Buffer)
+	subEncoder := dicom.NewWriter(b, dicom.DefaultMissingTransferSyntax())
+	subEncoder.SetTransferSyntax(binary.LittleEndian, true)
+	//subEncoder := dicomio.NewWriter(&b, binary.LittleEndian, true)
+	//subEncoder := dicomio.NewBytesEncoder(binary.LittleEndian, dicomio.ImplicitVR)
+	//order.PutUint16(bs, *v)
 	v.Encode(subEncoder)
-	if err := subEncoder.Error(); err != nil {
+	/* 	if err := subEncoder.Error(); err != nil {
 		e.SetError(err)
 		return
-	}
-	bytes := subEncoder.Bytes()
-	e.PushTransferSyntax(binary.LittleEndian, dicomio.ImplicitVR)
-	defer e.PopTransferSyntax()
-	dicom.WriteElement(e, newElement(dicomtag.CommandGroupLength, uint32(len(bytes))))
-	e.WriteBytes(bytes)
+	} */
+
+	e.SetTransferSyntax(binary.LittleEndian, true)
+	//e.PushTransferSyntax(binary.LittleEndian, dicomio.ImplicitVR)
+	//defer e.PopTransferSyntax()
+	//dicom.WriteElement(e, newElement(dicomtag.CommandGroupLength, uint32(len(bytes))))
+	e.WriteElement(newElement(dicomtag.CommandGroupLength, uint32(b.Len())))
+	e.WriteBytes(b.Bytes())
+
 }
 
 // CommandAssembler is a helper that assembles a DIMSE command message and data
@@ -295,11 +319,17 @@ func (a *CommandAssembler) AddDataPDU(pdu *pdu.PDataTf) (byte, Message, []byte, 
 		return 0, nil, nil, nil
 	}
 	if a.command == nil {
-		d := dicomio.NewBytesDecoder(a.commandBytes, nil, dicomio.UnknownVR)
+		d, err := dicom.ReadDataSetInBytes(&a.commandBytes, dicom.SkipPixelData(), dicom.SkipMetadataReadOnNewParserInit())
+		if err != nil {
+			log.Println("(AddDataPDU) error reading Bytes ", err)
+		}
+		a.command = ReadMessage(d)
+		/* d := dicomio.NewBytesDecoder(a.commandBytes, nil, dicomio.UnknownVR)
+
 		a.command = ReadMessage(d)
 		if err := d.Finish(); err != nil {
 			return 0, nil, nil, err
-		}
+		}*/
 	}
 	if a.command.HasData() && !a.readAllData {
 		return 0, nil, nil, nil

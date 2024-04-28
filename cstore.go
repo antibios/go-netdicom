@@ -1,13 +1,14 @@
 package netdicom
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 
-	"github.com/antibios/go-dicom"
-	"github.com/antibios/go-dicom/dicomio"
+	"github.com/antibios/dicom"
+	dicomtag "github.com/antibios/dicom/pkg/tag"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
 	"github.com/antibios/go-dicom/dicomlog"
-	"github.com/antibios/go-dicom/dicomtag"
-	"github.com/antibios/go-dicom/dicomuid"
 	"github.com/antibios/go-netdicom/dimse"
 )
 
@@ -16,16 +17,14 @@ import (
 func runCStoreOnAssociation(upcallCh chan upcallEvent, downcallCh chan stateEvent,
 	cm *contextManager,
 	messageID dimse.MessageID,
-	ds *dicom.DataSet) error {
+	ds *dicom.Dataset) error {
 	var getElement = func(tag dicomtag.Tag) (string, error) {
 		elem, err := ds.FindElementByTag(tag)
 		if err != nil {
 			return "", fmt.Errorf("dicom.cstore: data lacks %s: %v", tag.String(), err)
 		}
-		s, err := elem.GetString()
-		if err != nil {
-			return "", err
-		}
+		s := elem.Value.GetValue().([]string)[0]
+
 		return s, nil
 	}
 	sopInstanceUID, err := getElement(dicomtag.MediaStorageSOPInstanceUID)
@@ -48,16 +47,11 @@ func runCStoreOnAssociation(upcallCh chan upcallEvent, downcallCh chan stateEven
 		dicomuid.UIDString(sopClassUID),
 		sopInstanceUID)
 	// MK Write our own data to the DICOM file.
-	bodyEncoder := dicomio.NewBytesEncoderWithTransferSyntax(context.transferSyntaxUID)
+	bodyEncoder := bytes.Buffer{}
+	e := dicom.NewWriter(&bodyEncoder, dicom.SkipVRVerification())
+	e.SetTransferSyntax(binary.LittleEndian, true)
 	for _, elem := range ds.Elements {
-		if elem.Tag.Group == dicomtag.MetadataGroup {
-			continue
-		}
-		dicom.WriteElement(bodyEncoder, elem)
-	}
-	if err := bodyEncoder.Error(); err != nil {
-		dicomlog.Vprintf(0, "dicom.cstore(%s): body encoder failed: %v", cm.label, err)
-		return err
+		e.WriteElement(elem)
 	}
 	downcallCh <- stateEvent{
 		event: evt09,
@@ -66,7 +60,7 @@ func runCStoreOnAssociation(upcallCh chan upcallEvent, downcallCh chan stateEven
 			command: &dimse.CStoreRq{
 				AffectedSOPClassUID:    sopClassUID,
 				MessageID:              messageID,
-				CommandDataSetType:     dimse.CommandDataSetTypeNonNull,
+				CommandDataSetType:     int(dimse.CommandDataSetTypeNonNull),
 				AffectedSOPInstanceUID: sopInstanceUID,
 			},
 			data: bodyEncoder.Bytes(),

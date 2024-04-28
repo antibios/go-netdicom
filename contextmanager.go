@@ -3,11 +3,18 @@ package netdicom
 import (
 	"fmt"
 
-	"github.com/antibios/go-dicom"
+	dicomuid "github.com/antibios/dicom/pkg/uid"
 	"github.com/antibios/go-dicom/dicomlog"
-	"github.com/antibios/go-dicom/dicomuid"
 	"github.com/antibios/go-netdicom/pdu"
 )
+
+// GoDICOMImplementationClassUIDPrefix defines the UID prefix for
+// go-dicom. Provided by https://www.medicalconnections.co.uk/Free_UID
+const GoDICOMImplementationClassUIDPrefix = "1.2.826.0.1.3680043.9.7133"
+
+var GoDICOMImplementationClassUID = GoDICOMImplementationClassUIDPrefix + ".1.2"
+
+const GoDICOMImplementationVersionName = "GODICOM_1_1"
 
 type contextManagerEntry struct {
 	contextID         byte
@@ -90,9 +97,10 @@ func (m *contextManager) generateAssociateRequest(
 	items = append(items,
 		&pdu.UserInformationItem{
 			Items: []pdu.SubItem{
-				&pdu.UserInformationMaximumLengthItem{uint32(DefaultMaxPDUSize)},
-				&pdu.ImplementationClassUIDSubItem{dicom.GoDICOMImplementationClassUID},
-				&pdu.ImplementationVersionNameSubItem{dicom.GoDICOMImplementationVersionName}}})
+				&pdu.UserInformationMaximumLengthItem{MaximumLengthReceived: uint32(DefaultMaxPDUSize)},
+				&pdu.ImplementationClassUIDSubItem{Name: GoDICOMImplementationClassUID},
+				&pdu.ImplementationVersionNameSubItem{Name: GoDICOMImplementationVersionName},
+			}})
 
 	return items
 }
